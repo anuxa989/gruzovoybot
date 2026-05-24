@@ -5,8 +5,8 @@ import json
 import os
 
 TOKEN = '8838757333:AAHIRBf1R1bhOx2PBzx5_fPHCaglZEZvhaI'
-CHANNEL = '@gruziuzz'
-ЗАДЕРЖКА = 5
+CHANNEL = '@gruzovoyuz'
+ЗАДЕРЖКА = 0.5  # минут (30 секунд)
 ADMIN_ID = 6611319251  # ЗАМЕНИ НА СВОЙ ID от @userinfobot
 
 ВЫБОР, ОТКУДА, КУДА, ТИП_ГРУЗА, ВЕС, СТАВКА, КОНТАКТ = range(7)
@@ -71,9 +71,8 @@ def проверить_задержку(user_id):
         прошло = datetime.now() - последняя_отправка[user_id]
         осталось = timedelta(minutes=ЗАДЕРЖКА) - прошло
         if осталось.total_seconds() > 0:
-            минуты = int(осталось.total_seconds() // 60)
-            секунды = int(осталось.total_seconds() % 60)
-            return минуты, секунды
+            секунды = int(осталось.total_seconds())
+            return 0, секунды
     return None
 
 def статистика():
@@ -98,26 +97,26 @@ def создать_кнопки_списка(items_dict, тип, page=0):
     start = page * per_page
     end = start + per_page
     page_items = items[start:end]
-    
+
     buttons = []
     for idx, (user_id, item) in enumerate(page_items, start=start+1):
         краткое = item.get('краткое', f'{тип} {idx}')
         msg_id = item.get('msg_id', 0)
-        
+
         buttons.append([InlineKeyboardButton(
             f"{idx}. {краткое}",
-            url=f"https://t.me/gruziuzz/{msg_id}"
+            url=f"https://t.me/gruzovoyuz/{msg_id}"
         )])
-    
+
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"{тип}_page_{page-1}"))
     if end < len(items):
         nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"{тип}_page_{page+1}"))
-    
+
     if nav_buttons:
         buttons.append(nav_buttons)
-    
+
     return InlineKeyboardMarkup(buttons)
 
 async def показать_грузы(update, context, page=0):
@@ -127,10 +126,10 @@ async def показать_грузы(update, context, page=0):
         else:
             await update.message.reply_text('Активных грузов нет.')
         return
-    
+
     keyboard = создать_кнопки_списка(data['грузы'], 'груз', page)
     текст = f"📦 Активные грузы (стр. {page+1}):"
-    
+
     if update.callback_query:
         await update.callback_query.edit_message_text(текст, reply_markup=keyboard)
     else:
@@ -143,10 +142,10 @@ async def показать_машины(update, context, page=0):
         else:
             await update.message.reply_text('Свободных машин нет.')
         return
-    
+
     keyboard = создать_кнопки_списка(data['машины'], 'машина', page)
     текст = f"🚚 Свободные машины (стр. {page+1}):"
-    
+
     if update.callback_query:
         await update.callback_query.edit_message_text(текст, reply_markup=keyboard)
     else:
@@ -155,7 +154,7 @@ async def показать_машины(update, context, page=0):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data.startswith('груз_page_'):
         page = int(query.data.split('_')[-1])
         await показать_грузы(update, context, page)
@@ -175,7 +174,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data.setdefault('users', []).append(user_id)
         сохранить_данные(data)
     await update.message.reply_text(
-        'Добро пожаловать! 👋\n\nЭтот бот помогает добавлять грузы и машины в канал @gruziuzz\n\nВыбери действие:',
+        'Добро пожаловать! 👋\n\nЭтот бот помогает добавлять грузы и машины в канал @gruzovoyuz\n\nВыбери действие:',
         reply_markup=получить_меню(user_id)
     )
     return ВЫБОР
@@ -231,7 +230,7 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             del data['машины'][uid]
             удалено = True
-        
+
         if удалено:
             сохранить_данные(data)
             await update.message.reply_text('✅ Ваше объявление удалено!', reply_markup=получить_меню(user_id))
@@ -244,13 +243,28 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
         машин = len(data.get('машины', {}))
         пользователей = len(data.get('users', []))
         забанено = len(data.get('забаненные', []))
+
+        # Список всех объявлений с ID пользователей
+        список_грузов = ''
+        for uid, item in data.get('грузы', {}).items():
+            список_грузов += f"\n  • ID {uid}: {item.get('краткое', '?')}"
+
+        список_машин = ''
+        for uid, item in data.get('машины', {}).items():
+            список_машин += f"\n  • ID {uid}: {item.get('краткое', '?')}"
+
         await update.message.reply_text(
             f'👮 Админ панель\n\n'
             f'👥 Пользователей: {пользователей}\n'
-            f'📦 Активных грузов: {грузов}\n'
-            f'🚚 Свободных машин: {машин}\n'
+            f'📦 Активных грузов: {грузов}{список_грузов}\n\n'
+            f'🚚 Свободных машин: {машин}{список_машин}\n\n'
             f'🚫 Забанено: {забанено}\n\n'
-            f'Чтобы забанить пользователя напиши:\n/ban ID\n\nЧтобы разбанить:\n/unban ID',
+            f'━━━━━━━━━━━━━━━\n'
+            f'Команды:\n'
+            f'/ban ID — забанить\n'
+            f'/unban ID — разбанить\n'
+            f'/delcargo ID — удалить груз пользователя\n'
+            f'/delcar ID — удалить машину пользователя',
             reply_markup=получить_меню(user_id)
         )
         return ВЫБОР
@@ -259,7 +273,7 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if задержка:
         минуты, секунды = задержка
         await update.message.reply_text(
-            f'⏳ Подождите ещё {минуты} мин {секунды} сек.',
+            f'⏳ Подождите ещё {секунды} сек.',
             reply_markup=получить_меню(user_id)
         )
         return ВЫБОР
@@ -289,6 +303,52 @@ async def разбан(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data['забаненные'].remove(uid)
             сохранить_данные(data)
         await update.message.reply_text(f'✅ Пользователь {uid} разбанен.')
+
+async def удалить_груз_админ(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ удаляет груз по ID пользователя: /delcargo USER_ID"""
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text('Использование: /delcargo USER_ID')
+        return
+
+    uid = context.args[0]
+    if uid in data.get('грузы', {}):
+        try:
+            msg_id = data['грузы'][uid].get('msg_id')
+            if msg_id:
+                await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
+        except Exception:
+            pass
+        краткое = data['грузы'][uid].get('краткое', '?')
+        del data['грузы'][uid]
+        сохранить_данные(data)
+        await update.message.reply_text(f'✅ Груз пользователя {uid} удалён ({краткое}).')
+    else:
+        await update.message.reply_text(f'❌ Груз пользователя {uid} не найден.')
+
+async def удалить_машину_админ(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Админ удаляет машину по ID пользователя: /delcar USER_ID"""
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text('Использование: /delcar USER_ID')
+        return
+
+    uid = context.args[0]
+    if uid in data.get('машины', {}):
+        try:
+            msg_id = data['машины'][uid].get('msg_id')
+            if msg_id:
+                await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
+        except Exception:
+            pass
+        краткое = data['машины'][uid].get('краткое', '?')
+        del data['машины'][uid]
+        сохранить_данные(data)
+        await update.message.reply_text(f'✅ Машина пользователя {uid} удалена ({краткое}).')
+    else:
+        await update.message.reply_text(f'❌ Машина пользователя {uid} не найдена.')
 
 async def откуда(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['откуда'] = update.message.text
@@ -329,19 +389,16 @@ async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 Ставка: {context.user_data['ставка']}
 📞 Контакт: {context.user_data['контакт']}"""
 
-    # Сначала сохраняем в базу с временными данными
     краткое = f"{context.user_data['откуда']} → {context.user_data['куда']}"
     data.setdefault('грузы', {})[uid] = {
-        'msg_id': 0,  # временно
+        'msg_id': 0,
         'краткое': краткое,
         'текст': текст
     }
     сохранить_данные(data)
-    
-    # Потом отправляем в канал
+
     msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    
-    # Обновляем msg_id
+
     data['грузы'][uid]['msg_id'] = msg.message_id
     сохранить_данные(data)
 
@@ -377,19 +434,16 @@ async def машина_контакт(update: Update, context: ContextTypes.DEFA
 🚛 Тип: {context.user_data['м_тип']}
 📞 Контакт: {context.user_data['м_контакт']}"""
 
-    # Сначала сохраняем в базу
     краткое = f"{context.user_data['м_откуда']} → {context.user_data['м_куда']}"
     data.setdefault('машины', {})[uid] = {
-        'msg_id': 0,  # временно
+        'msg_id': 0,
         'краткое': краткое,
         'текст': текст
     }
     сохранить_данные(data)
-    
-    # Потом отправляем
+
     msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    
-    # Обновляем msg_id
+
     data['машины'][uid]['msg_id'] = msg.message_id
     сохранить_данные(data)
 
@@ -423,6 +477,8 @@ conv = ConversationHandler(
 app.add_handler(conv)
 app.add_handler(CommandHandler('ban', бан))
 app.add_handler(CommandHandler('unban', разбан))
+app.add_handler(CommandHandler('delcargo', удалить_груз_админ))
+app.add_handler(CommandHandler('delcar', удалить_машину_админ))
 app.add_handler(CallbackQueryHandler(callback_handler))
 print('Бот запущен!')
 app.run_polling()
