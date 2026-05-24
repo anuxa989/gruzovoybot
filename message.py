@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import json
 import os
 
-TOKEN = '8838757333:AAHIRBf1R1bhOx2PBzx5_fPHCaglZEZvhaI'
+TOKEN = os.getenv('BOT_TOKEN')
 CHANNEL = '@gruzovoyuz'
 ЗАДЕРЖКА = 0.5  # минут (30 секунд)
 ADMIN_ID = 6611319251  # ЗАМЕНИ НА СВОЙ ID от @userinfobot
