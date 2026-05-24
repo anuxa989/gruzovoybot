@@ -87,10 +87,8 @@ import os
 def получить_флаг(город: str) -> str:
     """Возвращает флаг страны по названию города, или 📍 если не найдено."""
     город_lower = город.strip().lower()
-    # Прямое совпадение
     if город_lower in ГОРОДА_ФЛАГИ:
         return ГОРОДА_ФЛАГИ[город_lower]
-    # Частичное совпадение (например "Москва, МКАд" → "москва")
     for ключ, флаг in ГОРОДА_ФЛАГИ.items():
         if ключ in город_lower or город_lower.startswith(ключ):
             return флаг
@@ -220,7 +218,7 @@ def создать_кнопки_списка(items_dict, тип, page=0):
     page_items = items[start:end]
 
     buttons = []
-    for idx, (user_id, item) in enumerate(page_items, start=start+1):
+    for idx, (запись_id, item) in enumerate(page_items, start=start+1):
         краткое = item.get('краткое', f'{тип} {idx}')
         msg_id = item.get('msg_id', 0)
         buttons.append([InlineKeyboardButton(
@@ -284,17 +282,14 @@ async def отмена(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    uid = str(user_id)
     if user_id not in data.get('users', []):
         data.setdefault('users', []).append(user_id)
         сохранить_данные(data)
 
-    # Если роль уже выбрана — сразу в меню
     if user_id == ADMIN_ID or получить_роль(user_id):
         await update.message.reply_text('Главное меню:', reply_markup=получить_меню(user_id))
         return ВЫБОР
 
-    # Иначе — выбор роли
     await update.message.reply_text(
         'Добро пожаловать! 👋\n\nКто вы?',
         reply_markup=меню_роли
@@ -359,27 +354,41 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if текст == '🗑 Удалить моё':
         удалено = False
-        if uid in data.get('грузы', {}):
+
+        # Удаляем все грузы пользователя
+        # Поддержка старого формата (ключ = uid) и нового (ключ = uid_timestamp)
+        грузы_удалить = [
+            k for k, v in data.get('грузы', {}).items()
+            if v.get('owner') == uid or k == uid
+        ]
+        for ключ in грузы_удалить:
             try:
-                msg_id = data['грузы'][uid].get('msg_id')
+                msg_id = data['грузы'][ключ].get('msg_id')
                 if msg_id:
                     await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
             except Exception:
                 pass
-            del data['грузы'][uid]
+            del data['грузы'][ключ]
             удалено = True
-        if uid in data.get('машины', {}):
+
+        # Удаляем все машины пользователя
+        машины_удалить = [
+            k for k, v in data.get('машины', {}).items()
+            if v.get('owner') == uid or k == uid
+        ]
+        for ключ in машины_удалить:
             try:
-                msg_id = data['машины'][uid].get('msg_id')
+                msg_id = data['машины'][ключ].get('msg_id')
                 if msg_id:
                     await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
             except Exception:
                 pass
-            del data['машины'][uid]
+            del data['машины'][ключ]
             удалено = True
+
         if удалено:
             сохранить_данные(data)
-            await update.message.reply_text('✅ Ваше объявление удалено!', reply_markup=получить_меню(user_id))
+            await update.message.reply_text('✅ Ваши объявления удалены!', reply_markup=получить_меню(user_id))
         else:
             await update.message.reply_text('У вас нет активных объявлений.', reply_markup=получить_меню(user_id))
         return ВЫБОР
@@ -390,11 +399,13 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
         пользователей = len(data.get('users', []))
         забанено = len(data.get('забаненные', []))
         список_грузов = ''
-        for u, item in data.get('грузы', {}).items():
-            список_грузов += f"\n  • ID {u}: {item.get('краткое', '?')}"
+        for запись_id, item in data.get('грузы', {}).items():
+            owner = item.get('owner', запись_id)
+            список_грузов += f"\n  • ID {owner}: {item.get('краткое', '?')}"
         список_машин = ''
-        for u, item in data.get('машины', {}).items():
-            список_машин += f"\n  • ID {u}: {item.get('краткое', '?')}"
+        for запись_id, item in data.get('машины', {}).items():
+            owner = item.get('owner', запись_id)
+            список_машин += f"\n  • ID {owner}: {item.get('краткое', '?')}"
         await update.message.reply_text(
             f'👮 Админ панель\n\n'
             f'👥 Пользователей: {пользователей}\n'
@@ -405,8 +416,8 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'Команды:\n'
             f'/ban ID — забанить\n'
             f'/unban ID — разбанить\n'
-            f'/delcargo ID — удалить груз пользователя\n'
-            f'/delcar ID — удалить машину пользователя',
+            f'/delcargo ID — удалить все грузы пользователя\n'
+            f'/delcar ID — удалить все машины пользователя',
             reply_markup=получить_меню(user_id)
         )
         return ВЫБОР
@@ -479,11 +490,19 @@ async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📞 Контакт: {context.user_data['контакт']}"""
 
     краткое = f"{context.user_data['откуда']} → {context.user_data['куда']}"
-    data.setdefault('грузы', {})[uid] = {'msg_id': 0, 'краткое': краткое, 'текст': текст}
+
+    # Уникальный ключ: uid + временная метка — позволяет хранить несколько грузов
+    запись_id = f"{uid}_{int(datetime.now().timestamp())}"
+    data.setdefault('грузы', {})[запись_id] = {
+        'msg_id': 0,
+        'краткое': краткое,
+        'текст': текст,
+        'owner': uid,
+    }
     сохранить_данные(data)
 
     msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    data['грузы'][uid]['msg_id'] = msg.message_id
+    data['грузы'][запись_id]['msg_id'] = msg.message_id
     сохранить_данные(data)
 
     await разослать_всем(context, f'🔔 Новый груз!\n\n{текст}{статистика()}')
@@ -530,11 +549,19 @@ async def машина_контакт(update: Update, context: ContextTypes.DEFA
 📞 Контакт: {context.user_data['м_контакт']}"""
 
     краткое = f"{context.user_data['м_откуда']} → {context.user_data['м_куда']}"
-    data.setdefault('машины', {})[uid] = {'msg_id': 0, 'краткое': краткое, 'текст': текст}
+
+    # Уникальный ключ: uid + временная метка
+    запись_id = f"{uid}_{int(datetime.now().timestamp())}"
+    data.setdefault('машины', {})[запись_id] = {
+        'msg_id': 0,
+        'краткое': краткое,
+        'текст': текст,
+        'owner': uid,
+    }
     сохранить_данные(data)
 
     msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    data['машины'][uid]['msg_id'] = msg.message_id
+    data['машины'][запись_id]['msg_id'] = msg.message_id
     сохранить_данные(data)
 
     await разослать_всем(context, f'🔔 Новая машина!\n\n{текст}{статистика()}')
@@ -560,13 +587,15 @@ async def список_пользователей(update: Update, context: Conte
         роль = роли.get(uid, 'не выбрана')
         статус = '🚫 забанен' if uid in забаненные else '✅'
 
+        грузы_польз = [v for v in грузы.values() if v.get('owner') == uid or (uid in грузы and v == грузы.get(uid))]
         груз_инфо = ''
-        if uid in грузы:
-            груз_инфо = f"\n    📦 Груз: {грузы[uid].get('краткое', '?')}"
+        for g in грузы_польз:
+            груз_инфо += f"\n    📦 Груз: {g.get('краткое', '?')}"
 
+        машины_польз = [v for v in машины.values() if v.get('owner') == uid or (uid in машины and v == машины.get(uid))]
         машина_инфо = ''
-        if uid in машины:
-            машина_инфо = f"\n    🚚 Машина: {машины[uid].get('краткое', '?')}"
+        for m in машины_польз:
+            машина_инфо += f"\n    🚚 Машина: {m.get('краткое', '?')}"
 
         текст += f'{статус} ID: {uid}\n    Роль: {роль}{груз_инфо}{машина_инфо}\n\n'
 
@@ -601,19 +630,24 @@ async def удалить_груз_админ(update: Update, context: ContextTyp
         await update.message.reply_text('Использование: /delcargo USER_ID')
         return
     uid = context.args[0]
-    if uid in data.get('грузы', {}):
-        try:
-            msg_id = data['грузы'][uid].get('msg_id')
-            if msg_id:
-                await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
-        except Exception:
-            pass
-        краткое = data['грузы'][uid].get('краткое', '?')
-        del data['грузы'][uid]
+    # Удаляем все грузы этого пользователя (новый и старый форматы)
+    грузы_удалить = [
+        k for k, v in data.get('грузы', {}).items()
+        if v.get('owner') == uid or k == uid
+    ]
+    if грузы_удалить:
+        for ключ in грузы_удалить:
+            try:
+                msg_id = data['грузы'][ключ].get('msg_id')
+                if msg_id:
+                    await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
+            except Exception:
+                pass
+            del data['грузы'][ключ]
         сохранить_данные(data)
-        await update.message.reply_text(f'✅ Груз пользователя {uid} удалён ({краткое}).')
+        await update.message.reply_text(f'✅ Все грузы пользователя {uid} удалены ({len(грузы_удалить)} шт.).')
     else:
-        await update.message.reply_text(f'❌ Груз пользователя {uid} не найден.')
+        await update.message.reply_text(f'❌ Грузы пользователя {uid} не найдены.')
 
 async def удалить_машину_админ(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -622,19 +656,24 @@ async def удалить_машину_админ(update: Update, context: Contex
         await update.message.reply_text('Использование: /delcar USER_ID')
         return
     uid = context.args[0]
-    if uid in data.get('машины', {}):
-        try:
-            msg_id = data['машины'][uid].get('msg_id')
-            if msg_id:
-                await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
-        except Exception:
-            pass
-        краткое = data['машины'][uid].get('краткое', '?')
-        del data['машины'][uid]
+    # Удаляем все машины этого пользователя (новый и старый форматы)
+    машины_удалить = [
+        k for k, v in data.get('машины', {}).items()
+        if v.get('owner') == uid or k == uid
+    ]
+    if машины_удалить:
+        for ключ in машины_удалить:
+            try:
+                msg_id = data['машины'][ключ].get('msg_id')
+                if msg_id:
+                    await context.bot.delete_message(chat_id=CHANNEL, message_id=msg_id)
+            except Exception:
+                pass
+            del data['машины'][ключ]
         сохранить_данные(data)
-        await update.message.reply_text(f'✅ Машина пользователя {uid} удалена ({краткое}).')
+        await update.message.reply_text(f'✅ Все машины пользователя {uid} удалены ({len(машины_удалить)} шт.).')
     else:
-        await update.message.reply_text(f'❌ Машина пользователя {uid} не найдена.')
+        await update.message.reply_text(f'❌ Машины пользователя {uid} не найдены.')
 
 # ── Запуск ─────────────────────────────────────────────
 
