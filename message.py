@@ -1,7 +1,7 @@
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, CallbackQueryHandler, filters, ContextTypes
 from datetime import datetime, timedelta
-import json
+from pymongo import MongoClient
 import os
 
 # ── Словарь городов → флаг страны ─────────────────────
@@ -85,7 +85,6 @@ import os
 }
 
 def получить_флаг(город: str) -> str:
-    """Возвращает флаг страны по названию города, или 📍 если не найдено."""
     город_lower = город.strip().lower()
     if город_lower in ГОРОДА_ФЛАГИ:
         return ГОРОДА_ФЛАГИ[город_lower]
@@ -94,6 +93,23 @@ def получить_флаг(город: str) -> str:
             return флаг
     return '📍'
 
+# ── Подключение к MongoDB ──────────────────────────────
+MONGO_URI = os.getenv('MONGO_URI')  # добавь в переменные Railway
+mongo_client = MongoClient(MONGO_URI)
+db_mongo = mongo_client['gruzovoyuz']
+col = db_mongo['data']  # одна коллекция, один документ
+
+def загрузить_данные():
+    doc = col.find_one({'_id': 'main'})
+    if doc:
+        doc.pop('_id', None)
+        return doc
+    return {'users': [], 'роли': {}, 'грузы': {}, 'машины': {}, 'отписавшиеся': [], 'забаненные': []}
+
+def сохранить_данные(data):
+    col.replace_one({'_id': 'main'}, {'_id': 'main', **data}, upsert=True)
+
+# ── Настройки бота ─────────────────────────────────────
 TOKEN = os.getenv('BOT_TOKEN')
 CHANNEL = '@gruzovoyuz'
 ЗАДЕРЖКА = 0.5  # минут (30 секунд)
@@ -105,26 +121,14 @@ ADMIN_ID = 6611319251
 (МАРШИНА_ОТКУДА, МАШИНА_КУДА, МАШИНА_ТИП, МАШИНА_КОЛ_ВО, МАШИНА_КОНТАКТ) = range(9, 14)
 
 последняя_отправка = {}
-
-def загрузить_данные():
-    if os.path.exists('data.json'):
-        with open('data.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {'users': [], 'роли': {}, 'грузы': {}, 'машины': {}, 'отписавшиеся': [], 'забаненные': []}
-
-def сохранить_данные(data):
-    with open('data.json', 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
 data = загрузить_данные()
 
-# Меню выбора роли (при старте)
+# ── Клавиатуры ─────────────────────────────────────────
 меню_роли = ReplyKeyboardMarkup([
     [KeyboardButton('🚛 Я водитель')],
     [KeyboardButton('📦 Я грузоотправитель')],
 ], resize_keyboard=True)
 
-# Меню для водителя
 меню_водитель = ReplyKeyboardMarkup([
     [KeyboardButton('🚚 Добавить машину')],
     [KeyboardButton('📋 Все грузы')],
@@ -137,7 +141,6 @@ data = загрузить_данные()
     [KeyboardButton('🔔 Подписаться'), KeyboardButton('🗑 Удалить моё')],
 ], resize_keyboard=True)
 
-# Меню для грузоотправителя
 меню_грузо = ReplyKeyboardMarkup([
     [KeyboardButton('📦 Добавить груз')],
     [KeyboardButton('📋 Все машины'), KeyboardButton('📋 Все грузы')],
@@ -150,7 +153,6 @@ data = загрузить_данные()
     [KeyboardButton('🔔 Подписаться'), KeyboardButton('🗑 Удалить моё')],
 ], resize_keyboard=True)
 
-# Меню админа
 админ_меню = ReplyKeyboardMarkup([
     [KeyboardButton('📦 Добавить груз')],
     [KeyboardButton('🚚 Добавить машину')],
@@ -170,6 +172,7 @@ data = загрузить_данные()
     [KeyboardButton('❌ Отмена')],
 ], resize_keyboard=True)
 
+# ── Вспомогательные функции ────────────────────────────
 def получить_роль(user_id):
     return data.get('роли', {}).get(str(user_id), None)
 
@@ -280,6 +283,7 @@ async def отмена(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('Главное меню:', reply_markup=получить_меню(user_id))
     return ВЫБОР
 
+# ── Старт ──────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id not in data.get('users', []):
@@ -290,10 +294,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('Главное меню:', reply_markup=получить_меню(user_id))
         return ВЫБОР
 
-    await update.message.reply_text(
-        'Добро пожаловать! 👋\n\nКто вы?',
-        reply_markup=меню_роли
-    )
+    await update.message.reply_text('Добро пожаловать! 👋\n\nКто вы?', reply_markup=меню_роли)
     return ВЫБОР_РОЛИ
 
 async def обработка_роли(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -321,6 +322,7 @@ async def обработка_роли(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text('Пожалуйста, выберите кто вы:', reply_markup=меню_роли)
         return ВЫБОР_РОЛИ
 
+# ── Главное меню ───────────────────────────────────────
 async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     текст = update.message.text
@@ -355,8 +357,6 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if текст == '🗑 Удалить моё':
         удалено = False
 
-        # Удаляем все грузы пользователя
-        # Поддержка старого формата (ключ = uid) и нового (ключ = uid_timestamp)
         грузы_удалить = [
             k for k, v in data.get('грузы', {}).items()
             if v.get('owner') == uid or k == uid
@@ -371,7 +371,6 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del data['грузы'][ключ]
             удалено = True
 
-        # Удаляем все машины пользователя
         машины_удалить = [
             k for k, v in data.get('машины', {}).items()
             if v.get('owner') == uid or k == uid
@@ -440,7 +439,6 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return МАРШИНА_ОТКУДА
 
 # ── Грузы ──────────────────────────────────────────────
-
 async def откуда(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['откуда'] = update.message.text
     await update.message.reply_text('Куда везём?', reply_markup=отмена_кнопка)
@@ -490,14 +488,9 @@ async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📞 Контакт: {context.user_data['контакт']}"""
 
     краткое = f"{context.user_data['откуда']} → {context.user_data['куда']}"
-
-    # Уникальный ключ: uid + временная метка — позволяет хранить несколько грузов
     запись_id = f"{uid}_{int(datetime.now().timestamp())}"
     data.setdefault('грузы', {})[запись_id] = {
-        'msg_id': 0,
-        'краткое': краткое,
-        'текст': текст,
-        'owner': uid,
+        'msg_id': 0, 'краткое': краткое, 'текст': текст, 'owner': uid,
     }
     сохранить_данные(data)
 
@@ -511,7 +504,6 @@ async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ВЫБОР
 
 # ── Машины ─────────────────────────────────────────────
-
 async def машина_откуда(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['м_откуда'] = update.message.text
     await update.message.reply_text('Куда едет машина?', reply_markup=отмена_кнопка)
@@ -549,14 +541,9 @@ async def машина_контакт(update: Update, context: ContextTypes.DEFA
 📞 Контакт: {context.user_data['м_контакт']}"""
 
     краткое = f"{context.user_data['м_откуда']} → {context.user_data['м_куда']}"
-
-    # Уникальный ключ: uid + временная метка
     запись_id = f"{uid}_{int(datetime.now().timestamp())}"
     data.setdefault('машины', {})[запись_id] = {
-        'msg_id': 0,
-        'краткое': краткое,
-        'текст': текст,
-        'owner': uid,
+        'msg_id': 0, 'краткое': краткое, 'текст': текст, 'owner': uid,
     }
     сохранить_данные(data)
 
@@ -570,38 +557,29 @@ async def машина_контакт(update: Update, context: ContextTypes.DEFA
     return ВЫБОР
 
 # ── Админ команды ──────────────────────────────────────
-
 async def список_пользователей(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
-
     роли = data.get('роли', {})
     грузы = data.get('грузы', {})
     машины = data.get('машины', {})
     забаненные = data.get('забаненные', [])
-
     текст = f'👥 Все пользователи ({len(data.get("users", []))}):\n\n'
-
     for user_id in data.get('users', []):
         uid = str(user_id)
         роль = роли.get(uid, 'не выбрана')
         статус = '🚫 забанен' if uid in забаненные else '✅'
-
-        грузы_польз = [v for v in грузы.values() if v.get('owner') == uid or (uid in грузы and v == грузы.get(uid))]
         груз_инфо = ''
-        for g in грузы_польз:
-            груз_инфо += f"\n    📦 Груз: {g.get('краткое', '?')}"
-
-        машины_польз = [v for v in машины.values() if v.get('owner') == uid or (uid in машины and v == машины.get(uid))]
+        for v in грузы.values():
+            if v.get('owner') == uid:
+                груз_инфо += f"\n    📦 {v.get('краткое', '?')}"
         машина_инфо = ''
-        for m in машины_польз:
-            машина_инфо += f"\n    🚚 Машина: {m.get('краткое', '?')}"
-
+        for v in машины.values():
+            if v.get('owner') == uid:
+                машина_инфо += f"\n    🚚 {v.get('краткое', '?')}"
         текст += f'{статус} ID: {uid}\n    Роль: {роль}{груз_инфо}{машина_инфо}\n\n'
-
     if len(текст) > 4096:
         текст = текст[:4090] + '\n...'
-
     await update.message.reply_text(текст)
 
 async def бан(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -630,7 +608,6 @@ async def удалить_груз_админ(update: Update, context: ContextTyp
         await update.message.reply_text('Использование: /delcargo USER_ID')
         return
     uid = context.args[0]
-    # Удаляем все грузы этого пользователя (новый и старый форматы)
     грузы_удалить = [
         k for k, v in data.get('грузы', {}).items()
         if v.get('owner') == uid or k == uid
@@ -656,7 +633,6 @@ async def удалить_машину_админ(update: Update, context: Contex
         await update.message.reply_text('Использование: /delcar USER_ID')
         return
     uid = context.args[0]
-    # Удаляем все машины этого пользователя (новый и старый форматы)
     машины_удалить = [
         k for k, v in data.get('машины', {}).items()
         if v.get('owner') == uid or k == uid
@@ -676,7 +652,6 @@ async def удалить_машину_админ(update: Update, context: Contex
         await update.message.reply_text(f'❌ Машины пользователя {uid} не найдены.')
 
 # ── Запуск ─────────────────────────────────────────────
-
 отмена_фильтр = MessageHandler(filters.Regex('^❌ Отмена$'), отмена)
 
 app = Application.builder().token(TOKEN).build()
