@@ -1,5 +1,5 @@
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import json
 import os
@@ -7,18 +7,18 @@ import os
 TOKEN = '8838757333:AAHIRBf1R1bhOx2PBzx5_fPHCaglZEZvhaI'
 CHANNEL = '@gruziuzz'
 ЗАДЕРЖКА = 5
+ADMIN_ID = 6611319251 
 
 ВЫБОР, ОТКУДА, КУДА, ТИП_ГРУЗА, ВЕС, СТАВКА, КОНТАКТ = range(7)
 МАРШИНА_ОТКУДА, МАШИНА_КУДА, МАШИНА_ТИП, МАШИНА_КОНТАКТ = range(7, 11)
 
 последняя_отправка = {}
 
-# База данных
 def загрузить_данные():
     if os.path.exists('data.json'):
         with open('data.json', 'r') as f:
             return json.load(f)
-    return {'users': [], 'грузы': {}, 'машины': {}}
+    return {'users': [], 'грузы': {}, 'машины': {}, 'отписавшиеся': [], 'забаненные': []}
 
 def сохранить_данные(data):
     with open('data.json', 'w') as f:
@@ -29,7 +29,30 @@ data = загрузить_данные()
 главное_меню = ReplyKeyboardMarkup([
     [KeyboardButton('📦 Добавить груз')],
     [KeyboardButton('🚚 Добавить машину')],
-    [KeyboardButton('🗑 Удалить моё объявление')],
+    [KeyboardButton('📋 Все грузы'), KeyboardButton('📋 Все машины')],
+    [KeyboardButton('🔕 Отписаться'), KeyboardButton('🗑 Удалить моё')],
+], resize_keyboard=True)
+
+меню_подписан = ReplyKeyboardMarkup([
+    [KeyboardButton('📦 Добавить груз')],
+    [KeyboardButton('🚚 Добавить машину')],
+    [KeyboardButton('📋 Все грузы'), KeyboardButton('📋 Все машины')],
+    [KeyboardButton('🔕 Отписаться'), KeyboardButton('🗑 Удалить моё')],
+], resize_keyboard=True)
+
+меню_отписан = ReplyKeyboardMarkup([
+    [KeyboardButton('📦 Добавить груз')],
+    [KeyboardButton('🚚 Добавить машину')],
+    [KeyboardButton('📋 Все грузы'), KeyboardButton('📋 Все машины')],
+    [KeyboardButton('🔔 Подписаться'), KeyboardButton('🗑 Удалить моё')],
+], resize_keyboard=True)
+
+админ_меню = ReplyKeyboardMarkup([
+    [KeyboardButton('📦 Добавить груз')],
+    [KeyboardButton('🚚 Добавить машину')],
+    [KeyboardButton('📋 Все грузы'), KeyboardButton('📋 Все машины')],
+    [KeyboardButton('🔕 Отписаться'), KeyboardButton('🗑 Удалить моё')],
+    [KeyboardButton('👮 Админ панель')],
 ], resize_keyboard=True)
 
 отмена_кнопка = ReplyKeyboardMarkup([
@@ -42,6 +65,13 @@ data = загрузить_данные()
     [KeyboardButton('🚐 Газель'), KeyboardButton('🏗 Борт')],
     [KeyboardButton('❌ Отмена')],
 ], resize_keyboard=True)
+
+def получить_меню(user_id):
+    if user_id == ADMIN_ID:
+        return админ_меню
+    if str(user_id) in data.get('отписавшиеся', []):
+        return меню_отписан
+    return меню_подписан
 
 def проверить_задержку(user_id):
     if user_id in последняя_отправка:
@@ -60,6 +90,10 @@ def статистика():
 
 async def разослать_всем(context, текст):
     for user_id in list(data['users']):
+        if str(user_id) in data.get('отписавшиеся', []):
+            continue
+        if str(user_id) in data.get('забаненные', []):
+            continue
         try:
             await context.bot.send_message(chat_id=user_id, text=текст)
         except Exception:
@@ -67,7 +101,8 @@ async def разослать_всем(context, текст):
 
 async def отмена(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text('Главное меню:', reply_markup=главное_меню)
+    user_id = update.message.from_user.id
+    await update.message.reply_text('Главное меню:', reply_markup=получить_меню(user_id))
     return ВЫБОР
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -77,16 +112,55 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         сохранить_данные(data)
     await update.message.reply_text(
         'Добро пожаловать! 👋\n\nЭтот бот помогает добавлять грузы и машины в канал @gruziuzz\n\nВыбери действие:',
-        reply_markup=главное_меню
+        reply_markup=получить_меню(user_id)
     )
     return ВЫБОР
 
 async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     текст = update.message.text
+    uid = str(user_id)
 
-    if текст == '🗑 Удалить моё объявление':
-        uid = str(user_id)
+    # Бан
+    if uid in data.get('забаненные', []):
+        await update.message.reply_text('🚫 Вы заблокированы.')
+        return ВЫБОР
+
+    # Подписка/отписка
+    if текст == '🔕 Отписаться':
+        if uid not in data.get('отписавшиеся', []):
+            data.setdefault('отписавшиеся', []).append(uid)
+            сохранить_данные(data)
+        await update.message.reply_text('🔕 Вы отписались от уведомлений.', reply_markup=получить_меню(user_id))
+        return ВЫБОР
+
+    if текст == '🔔 Подписаться':
+        if uid in data.get('отписавшиеся', []):
+            data['отписавшиеся'].remove(uid)
+            сохранить_данные(data)
+        await update.message.reply_text('🔔 Вы подписались на уведомления!', reply_markup=получить_меню(user_id))
+        return ВЫБОР
+
+    # Список грузов
+    if текст == '📋 Все грузы':
+        if not data['грузы']:
+            await update.message.reply_text('Активных грузов нет.', reply_markup=получить_меню(user_id))
+        else:
+            список = '\n\n'.join([f"• {v.get('текст', 'Груз')}" for v in data['грузы'].values()])
+            await update.message.reply_text(f'📦 Активные грузы:\n\n{список}', reply_markup=получить_меню(user_id))
+        return ВЫБОР
+
+    # Список машин
+    if текст == '📋 Все машины':
+        if not data['машины']:
+            await update.message.reply_text('Свободных машин нет.', reply_markup=получить_меню(user_id))
+        else:
+            список = '\n\n'.join([f"• {v.get('текст', 'Машина')}" for v in data['машины'].values()])
+            await update.message.reply_text(f'🚚 Свободные машины:\n\n{список}', reply_markup=получить_меню(user_id))
+        return ВЫБОР
+
+    # Удаление
+    if текст == '🗑 Удалить моё':
         удалено = False
         if uid in data['грузы']:
             try:
@@ -104,17 +178,35 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
             удалено = True
         сохранить_данные(data)
         if удалено:
-            await update.message.reply_text('✅ Ваше объявление удалено!', reply_markup=главное_меню)
+            await update.message.reply_text('✅ Ваше объявление удалено!', reply_markup=получить_меню(user_id))
         else:
-            await update.message.reply_text('У вас нет активных объявлений.', reply_markup=главное_меню)
+            await update.message.reply_text('У вас нет активных объявлений.', reply_markup=получить_меню(user_id))
         return ВЫБОР
 
+    # Админ панель
+    if текст == '👮 Админ панель' and user_id == ADMIN_ID:
+        грузов = len(data['грузы'])
+        машин = len(data['машины'])
+        пользователей = len(data['users'])
+        забанено = len(data.get('забаненные', []))
+        await update.message.reply_text(
+            f'👮 Админ панель\n\n'
+            f'👥 Пользователей: {пользователей}\n'
+            f'📦 Активных грузов: {грузов}\n'
+            f'🚚 Свободных машин: {машин}\n'
+            f'🚫 Забанено: {забанено}\n\n'
+            f'Чтобы забанить пользователя напиши:\n/ban ID\n\nЧтобы разбанить:\n/unban ID',
+            reply_markup=получить_меню(user_id)
+        )
+        return ВЫБОР
+
+    # Задержка
     задержка = проверить_задержку(user_id)
     if задержка:
         минуты, секунды = задержка
         await update.message.reply_text(
-            f'⏳ Подождите ещё {минуты} мин {секунды} сек перед следующей отправкой.',
-            reply_markup=главное_меню
+            f'⏳ Подождите ещё {минуты} мин {секунды} сек.',
+            reply_markup=получить_меню(user_id)
         )
         return ВЫБОР
 
@@ -124,6 +216,25 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif текст == '🚚 Добавить машину':
         await update.message.reply_text('Откуда машина?', reply_markup=отмена_кнопка)
         return МАРШИНА_ОТКУДА
+
+async def бан(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    if context.args:
+        uid = context.args[0]
+        data.setdefault('забаненные', []).append(uid)
+        сохранить_данные(data)
+        await update.message.reply_text(f'🚫 Пользователь {uid} забанен.')
+
+async def разбан(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    if context.args:
+        uid = context.args[0]
+        if uid in data.get('забаненные', []):
+            data['забаненные'].remove(uid)
+            сохранить_данные(data)
+        await update.message.reply_text(f'✅ Пользователь {uid} разбанен.')
 
 async def откуда(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['откуда'] = update.message.text
@@ -164,12 +275,12 @@ async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📞 Контакт: {context.user_data['контакт']}"""
 
     msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    data['грузы'][str(user_id)] = {'msg_id': msg.message_id}
+    data['грузы'][str(user_id)] = {'msg_id': msg.message_id, 'текст': текст}
     сохранить_данные(data)
 
     await разослать_всем(context, f'🔔 Новый груз!\n\n{текст}{статистика()}')
     последняя_отправка[user_id] = datetime.now()
-    await update.message.reply_text('✅ Груз отправлен в канал!', reply_markup=главное_меню)
+    await update.message.reply_text('✅ Груз отправлен в канал!', reply_markup=получить_меню(user_id))
     return ВЫБОР
 
 async def машина_откуда(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,12 +310,12 @@ async def машина_контакт(update: Update, context: ContextTypes.DEFA
 📞 Контакт: {context.user_data['м_контакт']}"""
 
     msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    data['машины'][str(user_id)] = {'msg_id': msg.message_id}
+    data['машины'][str(user_id)] = {'msg_id': msg.message_id, 'текст': текст}
     сохранить_данные(data)
 
     await разослать_всем(context, f'🔔 Новая машина!\n\n{текст}{статистика()}')
     последняя_отправка[user_id] = datetime.now()
-    await update.message.reply_text('✅ Машина отправлена в канал!', reply_markup=главное_меню)
+    await update.message.reply_text('✅ Машина отправлена в канал!', reply_markup=получить_меню(user_id))
     return ВЫБОР
 
 отмена_фильтр = MessageHandler(filters.Regex('^❌ Отмена$'), отмена)
@@ -229,6 +340,4 @@ conv = ConversationHandler(
     fallbacks=[отмена_фильтр]
 )
 
-app.add_handler(conv)
-print('Бот запущен!')
-app.run_polling()
+app.add_ha
