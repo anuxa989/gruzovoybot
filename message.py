@@ -1,19 +1,35 @@
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, CallbackQueryHandler, filters, ContextTypes
 from datetime import datetime, timedelta
+import json
+import os
 
 TOKEN = '8838757333:AAHIRBf1R1bhOx2PBzx5_fPHCaglZEZvhaI'
 CHANNEL = '@gruziuzz'
-ЗАДЕРЖКА = 5  # минут
+ЗАДЕРЖКА = 5
 
 ВЫБОР, ОТКУДА, КУДА, ТИП_ГРУЗА, ВЕС, СТАВКА, КОНТАКТ = range(7)
 МАРШИНА_ОТКУДА, МАШИНА_КУДА, МАШИНА_ТИП, МАШИНА_КОНТАКТ = range(7, 11)
 
 последняя_отправка = {}
 
+# База данных
+def загрузить_данные():
+    if os.path.exists('data.json'):
+        with open('data.json', 'r') as f:
+            return json.load(f)
+    return {'users': [], 'грузы': {}, 'машины': {}}
+
+def сохранить_данные(data):
+    with open('data.json', 'w') as f:
+        json.dump(data, f, ensure_ascii=False)
+
+data = загрузить_данные()
+
 главное_меню = ReplyKeyboardMarkup([
     [KeyboardButton('📦 Добавить груз')],
     [KeyboardButton('🚚 Добавить машину')],
+    [KeyboardButton('🗑 Удалить моё объявление')],
 ], resize_keyboard=True)
 
 отмена_кнопка = ReplyKeyboardMarkup([
@@ -37,12 +53,28 @@ def проверить_задержку(user_id):
             return минуты, секунды
     return None
 
+def статистика():
+    грузов = len(data['грузы'])
+    машин = len(data['машины'])
+    return f'\n\n📊 Сейчас активно: {грузов} груз(ов) | {машин} машин(ы)'
+
+async def разослать_всем(context, текст):
+    for user_id in list(data['users']):
+        try:
+            await context.bot.send_message(chat_id=user_id, text=текст)
+        except Exception:
+            pass
+
 async def отмена(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text('Главное меню:', reply_markup=главное_меню)
     return ВЫБОР
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if user_id not in data['users']:
+        data['users'].append(user_id)
+        сохранить_данные(data)
     await update.message.reply_text(
         'Добро пожаловать! 👋\n\nЭтот бот помогает добавлять грузы и машины в канал @gruziuzz\n\nВыбери действие:',
         reply_markup=главное_меню
@@ -51,6 +83,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    текст = update.message.text
+
+    if текст == '🗑 Удалить моё объявление':
+        uid = str(user_id)
+        удалено = False
+        if uid in data['грузы']:
+            try:
+                await context.bot.delete_message(chat_id=CHANNEL, message_id=data['грузы'][uid]['msg_id'])
+            except Exception:
+                pass
+            del data['грузы'][uid]
+            удалено = True
+        if uid in data['машины']:
+            try:
+                await context.bot.delete_message(chat_id=CHANNEL, message_id=data['машины'][uid]['msg_id'])
+            except Exception:
+                pass
+            del data['машины'][uid]
+            удалено = True
+        сохранить_данные(data)
+        if удалено:
+            await update.message.reply_text('✅ Ваше объявление удалено!', reply_markup=главное_меню)
+        else:
+            await update.message.reply_text('У вас нет активных объявлений.', reply_markup=главное_меню)
+        return ВЫБОР
+
     задержка = проверить_задержку(user_id)
     if задержка:
         минуты, секунды = задержка
@@ -60,7 +118,6 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ВЫБОР
 
-    текст = update.message.text
     if текст == '📦 Добавить груз':
         await update.message.reply_text('Откуда везём?', reply_markup=отмена_кнопка)
         return ОТКУДА
@@ -106,7 +163,11 @@ async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 Ставка: {context.user_data['ставка']}
 📞 Контакт: {context.user_data['контакт']}"""
 
-    await context.bot.send_message(chat_id=CHANNEL, text=текст)
+    msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
+    data['грузы'][str(user_id)] = {'msg_id': msg.message_id}
+    сохранить_данные(data)
+
+    await разослать_всем(context, f'🔔 Новый груз!\n\n{текст}{статистика()}')
     последняя_отправка[user_id] = datetime.now()
     await update.message.reply_text('✅ Груз отправлен в канал!', reply_markup=главное_меню)
     return ВЫБОР
@@ -137,7 +198,11 @@ async def машина_контакт(update: Update, context: ContextTypes.DEFA
 🚛 Тип: {context.user_data['м_тип']}
 📞 Контакт: {context.user_data['м_контакт']}"""
 
-    await context.bot.send_message(chat_id=CHANNEL, text=текст)
+    msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
+    data['машины'][str(user_id)] = {'msg_id': msg.message_id}
+    сохранить_данные(data)
+
+    await разослать_всем(context, f'🔔 Новая машина!\n\n{текст}{статистика()}')
     последняя_отправка[user_id] = datetime.now()
     await update.message.reply_text('✅ Машина отправлена в канал!', reply_markup=главное_меню)
     return ВЫБОР
