@@ -1,4 +1,3 @@
-
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters, ContextTypes
 from datetime import datetime, timedelta
@@ -10,7 +9,7 @@ CHANNEL = '@gruziuzz'
 ВЫБОР, ОТКУДА, КУДА, ТИП_ГРУЗА, ВЕС, СТАВКА, КОНТАКТ = range(7)
 МАРШИНА_ОТКУДА, МАШИНА_КУДА, МАШИНА_ТИП, МАШИНА_КОНТАКТ = range(7, 11)
 
-последняя_отправка = {}  # словарь для хранения времени последней отправки
+последняя_отправка = {}
 
 главное_меню = ReplyKeyboardMarkup([
     [KeyboardButton('📦 Добавить груз')],
@@ -44,7 +43,10 @@ async def отмена(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ВЫБОР
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('Привет! Выбери действие:', reply_markup=главное_меню)
+    await update.message.reply_text(
+        'Добро пожаловать! 👋\n\nЭтот бот помогает добавлять грузы и машины в канал @gruziuzz\n\nВыбери действие:',
+        reply_markup=главное_меню
+    )
     return ВЫБОР
 
 async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
