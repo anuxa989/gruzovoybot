@@ -7,7 +7,7 @@ import os
 TOKEN = '8838757333:AAHIRBf1R1bhOx2PBzx5_fPHCaglZEZvhaI'
 CHANNEL = '@gruziuzz'
 ЗАДЕРЖКА = 5
-ADMIN_ID = 6611319251  # твой Telegram ID (исправь если нужно)
+ADMIN_ID = 6611319251  # ЗАМЕНИ НА СВОЙ ID от @userinfobot
 
 ВЫБОР, ОТКУДА, КУДА, ТИП_ГРУЗА, ВЕС, СТАВКА, КОНТАКТ = range(7)
 МАРШИНА_ОТКУДА, МАШИНА_КУДА, МАШИНА_ТИП, МАШИНА_КОНТАКТ = range(7, 11)
@@ -102,12 +102,11 @@ def создать_кнопки_списка(items_dict, тип, page=0):
     buttons = []
     for idx, (user_id, item) in enumerate(page_items, start=start+1):
         краткое = item.get('краткое', f'{тип} {idx}')
-        chat_id = item.get('chat_id', CHANNEL)
         msg_id = item.get('msg_id', 0)
         
         buttons.append([InlineKeyboardButton(
             f"{idx}. {краткое}",
-            url=f"https://t.me/{chat_id.replace('@', '')}/{msg_id}"
+            url=f"https://t.me/gruziuzz/{msg_id}"
         )])
     
     nav_buttons = []
@@ -232,8 +231,9 @@ async def выбор(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
             del data['машины'][uid]
             удалено = True
-        сохранить_данные(data)
+        
         if удалено:
+            сохранить_данные(data)
             await update.message.reply_text('✅ Ваше объявление удалено!', reply_markup=получить_меню(user_id))
         else:
             await update.message.reply_text('У вас нет активных объявлений.', reply_markup=получить_меню(user_id))
@@ -317,6 +317,7 @@ async def ставка(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    uid = str(user_id)
     context.user_data['контакт'] = update.message.text
 
     текст = f"""📦 Новый груз
@@ -328,15 +329,20 @@ async def контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
 💰 Ставка: {context.user_data['ставка']}
 📞 Контакт: {context.user_data['контакт']}"""
 
-    msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    
+    # Сначала сохраняем в базу с временными данными
     краткое = f"{context.user_data['откуда']} → {context.user_data['куда']}"
-    data.setdefault('грузы', {})[str(user_id)] = {
-        'msg_id': msg.message_id,
-        'chat_id': CHANNEL,
+    data.setdefault('грузы', {})[uid] = {
+        'msg_id': 0,  # временно
         'краткое': краткое,
         'текст': текст
     }
+    сохранить_данные(data)
+    
+    # Потом отправляем в канал
+    msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
+    
+    # Обновляем msg_id
+    data['грузы'][uid]['msg_id'] = msg.message_id
     сохранить_данные(data)
 
     await разослать_всем(context, f'🔔 Новый груз!\n\n{текст}{статистика()}')
@@ -361,6 +367,7 @@ async def машина_тип(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def машина_контакт(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    uid = str(user_id)
     context.user_data['м_контакт'] = update.message.text
 
     текст = f"""🚚 Свободная машина
@@ -370,15 +377,20 @@ async def машина_контакт(update: Update, context: ContextTypes.DEFA
 🚛 Тип: {context.user_data['м_тип']}
 📞 Контакт: {context.user_data['м_контакт']}"""
 
-    msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
-    
+    # Сначала сохраняем в базу
     краткое = f"{context.user_data['м_откуда']} → {context.user_data['м_куда']}"
-    data.setdefault('машины', {})[str(user_id)] = {
-        'msg_id': msg.message_id,
-        'chat_id': CHANNEL,
+    data.setdefault('машины', {})[uid] = {
+        'msg_id': 0,  # временно
         'краткое': краткое,
         'текст': текст
     }
+    сохранить_данные(data)
+    
+    # Потом отправляем
+    msg = await context.bot.send_message(chat_id=CHANNEL, text=текст + статистика())
+    
+    # Обновляем msg_id
+    data['машины'][uid]['msg_id'] = msg.message_id
     сохранить_данные(data)
 
     await разослать_всем(context, f'🔔 Новая машина!\n\n{текст}{статистика()}')
